@@ -2,59 +2,113 @@
 
 ## Design goal
 
-Use the smallest understandable architecture that demonstrates an end-to-end controlled AI workflow.
+Use the smallest understandable architecture that demonstrates an end-to-end controlled AI workflow. No queues, no agents, no orchestration layer, no vector database.
 
 ## Components
 
 | Component | Technology | Responsibility |
 |---|---|---|
-| Web | Next.js | Mongolian leadership and reviewer interface |
-| API | FastAPI | Workflow endpoints, rule results, AI gateway, approval boundary |
-| Database | PostgreSQL | Structured truth, findings, decisions, audit events |
-| AI gateway | Python adapter | Mock generation or OpenAI-compatible API call |
-| Runtime | Docker Compose | Local deployment and service wiring |
+| Web | Next.js 16 (App Router, JavaScript) | Mongolian leadership and reviewer interface |
+| API | FastAPI | Workflow endpoints, rule evaluation, AI gateway, approval boundary |
+| Rules | `apps/api/app/rules.py` | Deterministic checks computed from database rows |
+| Database | PostgreSQL 16 | Structured facts, decisions, audit events |
+| AI gateway | `apps/api/app/ai.py` | Mock generation or an OpenAI-compatible API call |
+| Runtime | Docker Compose | Local three-service deployment with health checks |
 
 ## Request flow
 
 ```text
 Browser
-  → Next.js page
+  → Next.js server component
   → FastAPI endpoint
-  → parameterized SQL query
-  → explicit tender context
-  → AI gateway for draft only
-  → human approval endpoint
+  → parameterized SQL query (facts)
+  → rules.evaluate(tender, submissions)   [pure Python, no model]
+  → build_model_input(context)            [minimized payload]
+  → AI gateway, for draft prose only
+  → decision stored with status = 'draft'
+  → separate human approval endpoint
   → audit event
 ```
 
-## Data access rule
+## Where the boundaries are enforced
 
-The model never receives a database credential and cannot issue arbitrary SQL. Application code selects the exact structured facts and findings that are sent to the model.
+| Boundary | Enforced in |
+|---|---|
+| The model never sees a database credential or issues SQL | `app/ai.py` receives a plain dict only |
+| The model receives only the facts needed for the draft | `build_model_input` in `app/ai.py` |
+| Rule results cannot be produced or altered by the model | `app/rules.py` runs before the model and its output is returned to the caller unchanged |
+| Generation cannot approve | `POST /draft-summary` always inserts `status = 'draft'` and never touches `tenders.stage` |
+| Approval is a separate authorized action | `POST /approve` requires the `approver` demo role and an explicit `decision_id` |
+| Every important action is recorded | `record_audit` writes action, actor, actor role, target, metadata and time |
+| Provider failures stay recoverable | `ProviderError` is mapped to HTTP 502 with a message that never contains a key or a raw provider body |
+
+## Data model
+
+`tenders` and `tender_submissions` hold **facts**. Rule results are **not** stored;
+they are recomputed from the same rows on every request, so any reviewer can
+reproduce them by hand. `decisions` holds AI prose plus its approval state, and
+`source_snapshot` records exactly what the model was given. `audit_events` holds
+the history.
+
+Rule thresholds (`budget_mnt`, `min_technical_score`, `min_bidders`) live on the
+tender row, so policy can change without a code change.
+
+## API surface
+
+| Method | Path | Demo role | Purpose |
+|---|---|---|---|
+| GET | `/health` | — | Liveness, database state, active AI provider |
+| GET | `/api/v1/overview` | — | Dashboard metrics and workflow list |
+| GET | `/api/v1/tenders/{id}` | — | Facts, rule checks, findings, decisions, recent audit |
+| GET | `/api/v1/tenders/{id}/audit` | — | Full audit trail with Mongolian labels |
+| POST | `/api/v1/tenders/{id}/draft-summary` | `reviewer` or `approver` | Create an AI draft. Never approves. |
+| POST | `/api/v1/tenders/{id}/approve` | `approver` | Explicit human approval of one draft |
 
 ## AI provider interface
 
-Version 1 implements two modes:
+Version 1 implements two modes behind one `generate_tender_summary(model_input)` interface:
 
-- `mock`: deterministic local output for demonstrations and testing;
-- `openai-compatible`: HTTP request to a chat-completions compatible endpoint.
+- `mock` — deterministic local output. No network, no API key. The same input always produces the same text, which keeps demonstrations and tests predictable.
+- `openai-compatible` — a single HTTP request to a chat-completions endpoint, with a bounded timeout (`AI_TIMEOUT_SECONDS`, default 30 seconds).
 
-Additional providers should be implemented as small adapters behind the same `generate_tender_summary` interface.
+Additional providers should be added as small adapters behind the same interface.
+
+## Timeouts
+
+| Call | Setting | Default |
+|---|---|---|
+| Database connect | `DB_CONNECT_TIMEOUT` | 5s |
+| AI provider request | `AI_TIMEOUT_SECONDS` | 30s |
+| Next.js server-side API fetch | `API_TIMEOUT_MS` | 8000ms |
+
+## CORS
+
+`CORS_ORIGINS` defaults to `http://localhost:3000`. Credentials are disabled, only `GET` and `POST` are allowed, and only `Content-Type` and `X-Role` headers are accepted. Widen this deliberately, per deployment.
 
 ## Role boundary
 
-The demonstration approval endpoint requires `X-Role: approver`. This proves the application boundary but does not authenticate the person. Production deployments must replace it with validated identity claims from an identity provider.
+The demonstration approval endpoint requires `X-Role: approver`. **This is not authentication.** It proves that the application has a boundary and shows where verified identity claims must be connected. Anyone who can reach the API can set the header.
 
 ## Why no RAG
 
-The first workflow uses structured tender records, explicit findings, and selected source references. SQL and normal application logic are sufficient. RAG should be introduced only when a validated use case requires retrieval across a large unstructured document collection.
+The first workflow uses structured tender records, explicit rules, and selected source references. SQL and ordinary application logic are sufficient and are easier to audit. Retrieval should be introduced only when a validated use case requires searching a large unstructured document collection, and only when indexing, access filtering, citation quality, and evaluation can be governed.
+
+## Testing
+
+| File | Needs a database | Covers |
+|---|---|---|
+| `tests/test_rules.py` | no | Rule arithmetic, source references, thresholds |
+| `tests/test_ai.py` | no | Mock determinism, draft marker, data minimization, provider errors |
+| `tests/test_api.py` | yes (skips otherwise) | Health, listing, detail, mock draft, no implicit approval, wrong-role rejection, authorized approval, audit records |
+| `scripts/smoke.sh` | running stack | The same workflow through HTTP, including the web pages |
 
 ## Production extension points
 
-- identity provider and single sign-on;
-- organization-specific workflow states;
-- rules stored as governed configuration;
-- document storage and malware scanning;
-- approved model providers or local models;
-- encryption and secrets management;
-- observability and retention controls; and
+- identity provider and single sign-on to replace `X-Role`;
+- organization-specific workflow states and rule sets;
+- rules stored as governed configuration rather than code;
+- document storage, virus scanning, and source links;
+- approved model providers or locally hosted models;
+- secrets management and encryption at rest;
+- observability, retention, and export controls; and
 - integration with existing procurement systems.
