@@ -5,7 +5,7 @@ A small, working **reference implementation** that connects organizational data,
 It is aimed at ministries, agencies, state-owned enterprises, NGOs, and companies that want a practical starting point instead of a large "AI transformation" programme.
 
 > **This is a reference implementation, not a production-ready procurement system.**
-> All sample organizations, officials, bidders, tenders, and records are fictional. The demonstration role header is not authentication. Do not use this repository unchanged for an official decision.
+> All organizations, bidders, tenders, amounts, and document references in the current v0.1.0 demonstration dataset are fictional. The demonstration role header is not authentication. Do not use this repository unchanged for an official decision.
 
 > AI is not the organization's brain. Verified data, rules, workflows, decisions, and institutional memory are the brain. AI is a controlled assistant on top of that foundation.
 
@@ -199,6 +199,4 @@ Technical documentation is written in English. The leadership-facing interface a
 
 ## License
 
-Licensed under the [Apache License, Version 2.0](LICENSE), which grants an explicit patent licence alongside the usual copyright permission.
-
-The licence applies to the code in this repository. It does not turn the fictional sample data, or anything this application drafts, into an official record.
+Licensed under the [Apache License 2.0](LICENSE).
