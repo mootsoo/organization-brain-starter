@@ -8,14 +8,15 @@ AI output is advisory. It may organize evidence, identify inconsistencies, and p
 
 | # | Control | Implementation |
 |---|---|---|
-| 1 | **Source traceability** — every finding identifies its source record | `source_reference` on every finding in `app/rules.py`; shown under each finding in the interface |
+| 1 | **Source traceability** — every finding identifies its source record | `source_reference` on every finding in `app/rules.py`; returned by the API, shown under each finding in the interface, and stored with the draft in `decisions.source_snapshot`. It is deliberately **not** sent to the AI provider (control 6) |
 | 2 | **Rule transparency** — deterministic checks stay visible and separate from AI prose | `app/rules.py` runs before the model; passing rules are displayed too, not only failures |
 | 3 | **Human approval** — official status cannot change through AI generation alone | `POST /draft-summary` writes `status = 'draft'` only; `tenders.stage` is untouched |
 | 4 | **Auditability** — generation and approval are recorded | `audit_events` rows with action, actor, actor role, target, metadata, timestamp |
 | 5 | **Least privilege** — actions are role-bound | `require_role`; drafting and approving are different permissions |
-| 6 | **Data minimization** — only necessary information reaches the model | `build_model_input` drops row identifiers and document pointers |
+| 6 | **Data minimization** — only necessary information reaches the model | `build_model_input` sends tender facts, bidder facts, and each finding's `rule_id`, `severity` and Mongolian message. Row identifiers, document pointers (`evidence_reference`) and the raw `source_reference` row pointer are excluded. `tests/test_ai.py` walks the whole payload recursively, and the outbound HTTP body, to prove it |
 | 7 | **Provider control** — each deployment approves where data is processed | `AI_PROVIDER`, `AI_BASE_URL` are explicit configuration with a working offline default |
 | 8 | **Safe failure** — provider errors do not leak configuration | `ProviderError` messages never include a key, a header, or a raw provider body |
+| 9 | **Atomic approval** — a draft can be approved once, even by simultaneous requests | `POST /approve` decides the transition with one conditional `UPDATE ... WHERE status = 'draft' RETURNING ...`. If it returns no row the transaction is rolled back: HTTP 409, no stage change, no audit event |
 
 ## Prohibited Version 1 behaviour
 

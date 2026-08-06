@@ -94,7 +94,7 @@ This is what an IT officer can click, and what each step proves.
 | 2 | Open the sample tender | Structured facts are stored per bidder, each with a source reference. |
 | 3 | Read section 2, "Дүрмийн шалгалт" | Five deterministic rules ran. Passing rules are shown too, not only failures. Each finding names the exact row and column it came from. |
 | 4 | In section 3, set the demo role to **Ажиглагч (эрхгүй)** and press "AI-аар төсөл бэлтгэх" | The application boundary rejects the action. Nothing is created. |
-| 5 | Set the role to **Хянагч** and press the same button | The mock provider writes a Mongolian draft with no API key. The draft repeats the rule findings and their sources, and states in Mongolian that it is a draft, not a decision. |
+| 5 | Set the role to **Хянагч** and press the same button | The mock provider writes a Mongolian draft with no API key. The draft repeats the rule findings and names the rule that produced each one, states that the exact source references were not sent to the AI and stay in section 2, and states in Mongolian that it is a draft, not a decision. |
 | 6 | Look at section 4 and the tender status | The tender is still "Хүний хяналт". Generating a draft did not approve anything. |
 | 7 | Keep the role **Хянагч** and press "Хүний шийдвэрээр батлах" | Approval is refused. Drafting and approving are different permissions. |
 | 8 | Set the role to **Батлах эрх бүхий хүн** and press it again | The decision becomes approved and the tender stage changes to "Батлагдсан". |
@@ -104,7 +104,7 @@ This is what an IT officer can click, and what each step proves.
 To run the same walkthrough automatically:
 
 ```bash
-./scripts/smoke.sh                      # 23 checks against the running stack
+./scripts/smoke.sh                      # 25 checks against the running stack
 RESTART_CHECK=1 ./scripts/smoke.sh      # also proves persistence across a restart
 ```
 
@@ -144,7 +144,7 @@ AI_API_KEY=replace-me
 AI_MODEL=replace-me
 ```
 
-The application sends only the structured tender facts and rule findings needed for the draft (see `build_model_input` in `apps/api/app/ai.py`). It does not give the model database access. If the provider fails, the API returns a clear recoverable error and no draft is stored.
+The application sends only the structured tender facts and the rule findings needed for the draft (see `build_model_input` in `apps/api/app/ai.py`). Internal row identifiers, document pointers (`evidence_reference`) and the raw `source_reference` row pointer are **not** sent; each finding reaches the provider as its `rule_id`, severity and Mongolian message only. Those source references remain available to people: they are returned by the API, shown under every finding in the interface, and stored with the draft in `decisions.source_snapshot`. The model is not given database access. If the provider fails, the API returns a clear recoverable error and no draft is stored.
 
 ## Repository map
 

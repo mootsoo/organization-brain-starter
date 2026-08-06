@@ -23,7 +23,8 @@ Browser
   → FastAPI endpoint
   → parameterized SQL query (facts)
   → rules.evaluate(tender, submissions)   [pure Python, no model]
-  → build_model_input(context)            [minimized payload]
+  → build_model_input(context)            [minimized: no row ids, no
+                                           document pointers, no source_reference]
   → AI gateway, for draft prose only
   → decision stored with status = 'draft'
   → separate human approval endpoint
@@ -35,20 +36,38 @@ Browser
 | Boundary | Enforced in |
 |---|---|
 | The model never sees a database credential or issues SQL | `app/ai.py` receives a plain dict only |
-| The model receives only the facts needed for the draft | `build_model_input` in `app/ai.py` |
+| The model receives only the facts needed for the draft, with no row identifier, document pointer or `source_reference` string | `build_model_input` in `app/ai.py` |
 | Rule results cannot be produced or altered by the model | `app/rules.py` runs before the model and its output is returned to the caller unchanged |
 | Generation cannot approve | `POST /draft-summary` always inserts `status = 'draft'` and never touches `tenders.stage` |
 | Approval is a separate authorized action | `POST /approve` requires the `approver` demo role and an explicit `decision_id` |
+| A draft can be approved only once, even under simultaneous requests | one conditional `UPDATE ... WHERE status = 'draft' RETURNING ...` is the authority; a `None` result raises 409 and rolls the transaction back |
 | Every important action is recorded | `record_audit` writes action, actor, actor role, target, metadata and time |
 | Provider failures stay recoverable | `ProviderError` is mapped to HTTP 502 with a message that never contains a key or a raw provider body |
+
+### What the model input contains
+
+`build_model_input` in `app/ai.py` is the only place a provider payload is assembled.
+
+| Sent to the provider | Never sent |
+|---|---|
+| tender code, title, budget, `min_technical_score`, `min_bidders` | `tenders.id`, `tender_submissions.id`, `decisions.id` |
+| per-bidder organization name, proposed amount, document and tax flags, technical score | `evidence_reference` (a document pointer) |
+| each finding's `rule_id`, `severity` and Mongolian `message_mn` | each finding's `source_reference` (`tender_submissions #<id> · <column> · <document>`) |
+| the list of rule identifiers that ran | decision history and audit events |
+
+Excluding `source_reference` does not reduce human traceability. It is still
+computed by `app/rules.py`, returned by `GET /api/v1/tenders/{id}`, displayed
+under every finding in the interface, and stored with the draft in
+`decisions.source_snapshot`.
 
 ## Data model
 
 `tenders` and `tender_submissions` hold **facts**. Rule results are **not** stored;
 they are recomputed from the same rows on every request, so any reviewer can
-reproduce them by hand. `decisions` holds AI prose plus its approval state, and
-`source_snapshot` records exactly what the model was given. `audit_events` holds
-the history.
+reproduce them by hand. `decisions` holds AI prose plus its approval state. `source_snapshot` records
+both `model_input` (exactly what the provider was given) and `rule_findings`
+(the full human-facing evidence, including the source references that are kept
+out of the model input). `audit_events` holds the history.
 
 Rule thresholds (`budget_mnt`, `min_technical_score`, `min_bidders`) live on the
 tender row, so policy can change without a code change.
@@ -98,8 +117,8 @@ The first workflow uses structured tender records, explicit rules, and selected 
 | File | Needs a database | Covers |
 |---|---|---|
 | `tests/test_rules.py` | no | Rule arithmetic, source references, thresholds |
-| `tests/test_ai.py` | no | Mock determinism, draft marker, data minimization, provider errors |
-| `tests/test_api.py` | yes (skips otherwise) | Health, listing, detail, mock draft, no implicit approval, wrong-role rejection, authorized approval, audit records |
+| `tests/test_ai.py` | no | Mock determinism, draft marker, recursive data-minimization checks over the complete payload and over the outbound HTTP body, provider errors |
+| `tests/test_api.py` | yes (skips otherwise) | Health, listing, detail, mock draft, no implicit approval, wrong-role rejection, authorized approval, audit records, and competing approvals (exactly one 200, one 409, one audit event) |
 | `scripts/smoke.sh` | running stack | The same workflow through HTTP, including the web pages |
 
 ## Production extension points
