@@ -1,104 +1,149 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+// Demonstration roles only. This selector exists so a reviewer can see the
+// application boundary reject an action. It is not authentication.
+const DEMO_ROLES = [
+  { value: "viewer", label: "Ажиглагч (эрхгүй)" },
+  { value: "reviewer", label: "Хянагч" },
+  { value: "approver", label: "Батлах эрх бүхий хүн" },
+];
+
 export default function DecisionPanel({ tenderId }) {
+  const router = useRouter();
+  const [role, setRole] = useState("reviewer");
   const [draft, setDraft] = useState(null);
   const [approved, setApproved] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
+  async function request(path, options) {
+    const response = await fetch(`${apiUrl}${path}`, options);
+    let payload = {};
+    try {
+      payload = await response.json();
+    } catch {
+      payload = {};
+    }
+    if (!response.ok) {
+      throw new Error(payload.detail || `Хүсэлт амжилтгүй боллоо (${response.status}).`);
+    }
+    return payload;
+  }
+
   async function createDraft() {
-    setLoading(true);
+    setBusy(true);
     setError("");
     setApproved(false);
-
     try {
-      const response = await fetch(`${apiUrl}/api/v1/tenders/${tenderId}/draft-summary`, {
+      const payload = await request(`/api/v1/tenders/${tenderId}/draft-summary`, {
         method: "POST",
-        headers: { "X-Role": "reviewer" },
+        headers: { "X-Role": role },
       });
-      const payload = await response.json();
-      if (!response.ok) {
-        throw new Error(payload.detail || "Төсөл бэлтгэж чадсангүй.");
-      }
       setDraft(payload);
+      router.refresh();
     } catch (requestError) {
       setError(requestError.message);
     } finally {
-      setLoading(false);
+      setBusy(false);
     }
   }
 
   async function approveDraft() {
     if (!draft) return;
-    setLoading(true);
+    setBusy(true);
     setError("");
-
     try {
-      const response = await fetch(`${apiUrl}/api/v1/tenders/${tenderId}/approve`, {
+      await request(`/api/v1/tenders/${tenderId}/approve`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Role": "approver",
-        },
+        headers: { "Content-Type": "application/json", "X-Role": role },
         body: JSON.stringify({
           decision_id: draft.decision_id,
-          approved_by: "Демо эрх бүхий хянагч",
-          note: "Жишээ орчинд хүний хяналтаар батлав.",
+          approved_by: "Жишээ эрх бүхий хянагч",
+          note: "Жишээ орчинд хүний хяналтаар баталлаа.",
         }),
       });
-      const payload = await response.json();
-      if (!response.ok) {
-        throw new Error(payload.detail || "Баталгаажуулж чадсангүй.");
-      }
       setApproved(true);
+      router.refresh();
     } catch (requestError) {
       setError(requestError.message);
     } finally {
-      setLoading(false);
+      setBusy(false);
     }
   }
 
   return (
-    <section className="decision-panel">
-      <div className="panel-heading">
-        <div>
-          <span className="eyebrow">AI туслах + хүний шийдвэр</span>
-          <h2>Дүгнэлтийн төсөл</h2>
-        </div>
-        <span className="demo-label">Demo mode</span>
+    <>
+      <div className="section-title">
+        <h2>3. AI төсөл ба хүний шийдвэр</h2>
+        <p>
+          AI зөвхөн дээрх баримт, дүрмийн шалгалтад тулгуурлан төсөл бичнэ. Төсөл нь албан ёсны
+          шийдвэр биш. Батлах үйлдэл тусдаа бөгөөд зөвхөн эрх бүхий хүн хийнэ.
+        </p>
       </div>
 
-      <p className="panel-explanation">
-        AI зөвхөн харагдаж буй бүтэцтэй мэдээллээс төсөл бэлтгэнэ. Үүний дараа тусдаа хүний
-        баталгаажуулалт шаардлагатай.
-      </p>
-
-      {!draft ? (
-        <button className="button primary" onClick={createDraft} disabled={loading}>
-          {loading ? "Бэлтгэж байна…" : "AI-аар төсөл бэлтгэх"}
-        </button>
-      ) : (
-        <div className="draft-box">
-          <div className="draft-meta">
-            <span>Provider: {draft.provider}</span>
-            <span>Status: {approved ? "approved" : draft.status}</span>
-          </div>
-          <p>{draft.summary_mn}</p>
-          {!approved ? (
-            <button className="button approval" onClick={approveDraft} disabled={loading}>
-              {loading ? "Хадгалж байна…" : "Хүний шийдвэрээр батлах"}
-            </button>
-          ) : (
-            <div className="approval-message">Хүний баталгаажуулалт аудитын бүртгэлд хадгалагдлаа.</div>
-          )}
+      <div className="card">
+        <div className="panel-head">
+          <h3>Дүгнэлтийн төсөл</h3>
+          <span className="badge quiet">Үзүүлэнгийн горим</span>
         </div>
-      )}
 
-      {error ? <div className="notice error compact">{error}</div> : null}
-    </section>
+        <div className="role-row">
+          <label htmlFor="demo-role">Үзүүлэнгийн эрх:</label>
+          <select
+            id="demo-role"
+            value={role}
+            onChange={(event) => setRole(event.target.value)}
+            disabled={busy}
+          >
+            {DEMO_ROLES.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="buttons">
+          <button className="button" onClick={createDraft} disabled={busy}>
+            {busy ? "Түр хүлээнэ үү…" : "AI-аар төсөл бэлтгэх"}
+          </button>
+          {draft && !approved ? (
+            <button className="button secondary" onClick={approveDraft} disabled={busy}>
+              {busy ? "Түр хүлээнэ үү…" : "Хүний шийдвэрээр батлах"}
+            </button>
+          ) : null}
+        </div>
+
+        {error ? (
+          <div className="notice error" role="alert" style={{ marginTop: "14px" }}>
+            {error}
+          </div>
+        ) : null}
+
+        {draft ? (
+          <div className="draft">
+            <div className="draft-meta">
+              <span>Төлөв: {approved ? "Батлагдсан" : "Төсөл"}</span>
+              <span>Provider: {draft.provider}</span>
+              <span>Model: {draft.model}</span>
+              <span>Шийдвэр №{draft.decision_id}</span>
+            </div>
+            <p className="draft-text">{draft.summary_mn}</p>
+            {approved ? (
+              <div className="notice accent">
+                Хүний баталгаажуулалт аудитын бүртгэлд хадгалагдлаа.
+              </div>
+            ) : (
+              <div className="notice attention">{draft.note_mn}</div>
+            )}
+          </div>
+        ) : null}
+      </div>
+    </>
   );
 }
