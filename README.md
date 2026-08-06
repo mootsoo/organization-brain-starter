@@ -196,3 +196,9 @@ Technical documentation is written in English. The leadership-facing interface a
 ## Status
 
 **Phase 1: working foundation.** The goal is not to build a national platform in one step. The goal is to prove one understandable workflow end to end, then add only what real users need.
+
+## License
+
+Licensed under the [Apache License, Version 2.0](LICENSE), which grants an explicit patent licence alongside the usual copyright permission.
+
+The licence applies to the code in this repository. It does not turn the fictional sample data, or anything this application drafts, into an official record.
