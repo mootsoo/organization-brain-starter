@@ -94,6 +94,14 @@ decision_id=$(json "$draft" 'd["decision_id"]')
 draft_text=$(json "$draft" 'd["summary_mn"]')
 check "8. mock AI draft generated" "$(json "$draft" 'd["provider"]')" "mock"
 
+# 8b. Data minimization: the draft cannot quote an internal pointer -----------
+# `source_reference` is never sent to the provider, so it cannot come back.
+case "$draft_text" in
+  *"tender_submissions #"*)  bad "8b. AI draft quotes no internal row pointer" ;;
+  *"Материалын хавтас №"*)   bad "8b. AI draft quotes no internal row pointer" ;;
+  *) ok "8b. AI draft quotes no internal row pointer" ;;
+esac
+
 # 9. Draft is not an official decision ---------------------------------------
 check "9. draft is not official" "$(json "$draft" 'str(d["official"])')" "False"
 after_draft=$(curl -s "$API_URL/api/v1/tenders/$TENDER_ID")
@@ -128,6 +136,9 @@ check "12c. approving twice is refused" \
 audit=$(curl -s "$API_URL/api/v1/tenders/$TENDER_ID/audit")
 check "13. approval recorded in the audit trail" \
   "$(json "$audit" '"yes" if any(e["event_type"]=="human_approval_recorded" for e in d["audit_events"]) else "no"')" "yes"
+check "13b. exactly one approval event for this decision" \
+  "$(printf '%s' "$audit" | DECISION_ID="$decision_id" python3 -c \
+    'import json,os,sys; d=json.load(sys.stdin); t="decision:"+os.environ["DECISION_ID"]; print(sum(1 for e in d["audit_events"] if e["event_type"]=="human_approval_recorded" and e["target"]==t))')" "1"
 check "14. AI generation recorded in the audit trail" \
   "$(json "$audit" '"yes" if any(e["event_type"]=="ai_draft_generated" for e in d["audit_events"]) else "no"')" "yes"
 check "15. audit records are understandable" \

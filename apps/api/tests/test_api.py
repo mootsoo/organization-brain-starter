@@ -2,14 +2,19 @@
 
 These protect the Phase 1 boundaries that unit tests cannot prove:
 generation does not approve, the wrong role cannot approve, the right role can,
-and both actions leave an audit record.
+both actions leave an audit record, and two approval requests competing for the
+same draft cannot both succeed.
 
 They are skipped when no database is reachable, so `pytest` still works for a
 developer who has only checked out the code. CI starts a PostgreSQL service and
 loads `database/init.sql`, so there they always run.
 """
 
+import contextlib
 import os
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -119,6 +124,33 @@ def _audit_types() -> list[str]:
             "SELECT event_type FROM audit_events WHERE tender_id = %s", (TEST_TENDER_ID,)
         ).fetchall()
     return [row["event_type"] for row in rows]
+
+
+def _approval_event_count(decision_id: int) -> int:
+    """Approval audit events written for exactly this decision."""
+    with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS total
+            FROM audit_events
+            WHERE tender_id = %s
+              AND event_type = 'human_approval_recorded'
+              AND target = %s
+            """,
+            (TEST_TENDER_ID, f"decision:{decision_id}"),
+        ).fetchone()
+    return int(row["total"])
+
+
+@contextlib.contextmanager
+def _independent_clients(count: int):
+    """Separate TestClient instances so competing requests do not share one."""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    with contextlib.ExitStack() as stack:
+        yield [stack.enter_context(TestClient(app)) for _ in range(count)]
 
 
 def _draft(client) -> dict:
@@ -271,16 +303,137 @@ def test_approval_is_recorded_in_the_audit_trail(client):
 
 
 def test_a_draft_cannot_be_approved_twice(client):
+    """Sequential boundary check. The competing-request case is tested below."""
     draft = _draft(client)
     body = {"decision_id": draft["decision_id"], "approved_by": "Жишээ эрх бүхий хянагч"}
     headers = {"X-Role": "approver"}
 
-    assert client.post(
+    first = client.post(
         f"/api/v1/tenders/{TEST_TENDER_ID}/approve", json=body, headers=headers
-    ).status_code == 200
-    assert client.post(
+    )
+    second = client.post(
         f"/api/v1/tenders/{TEST_TENDER_ID}/approve", json=body, headers=headers
-    ).status_code == 409
+    )
+
+    assert first.status_code == 200
+    assert first.json()["decision"] is not None
+    assert second.status_code == 409
+    assert "decision" not in second.json()
+    assert _approval_event_count(draft["decision_id"]) == 1
+
+
+def test_approving_a_decision_that_belongs_to_another_tender_returns_404(client):
+    draft = _draft(client)
+
+    response = client.post(
+        "/api/v1/tenders/999999/approve",
+        json={"decision_id": draft["decision_id"], "approved_by": "Жишээ эрх бүхий хянагч"},
+        headers={"X-Role": "approver"},
+    )
+
+    assert response.status_code == 404
+    assert _decision_status(draft["decision_id"]) == "draft"
+    assert _approval_event_count(draft["decision_id"]) == 0
+
+
+# --- competing approvals ----------------------------------------------------
+
+
+def test_two_competing_approvals_produce_one_success_and_one_conflict(client):
+    """Two real HTTP requests race for the same draft against real PostgreSQL."""
+    draft = _draft(client)
+    body = {
+        "decision_id": draft["decision_id"],
+        "approved_by": "Жишээ эрх бүхий хянагч",
+        "note": "Өрсөлдөх хүсэлтийн туршилт.",
+    }
+    headers = {"X-Role": "approver"}
+    start = threading.Barrier(2, timeout=30)
+
+    def approve(test_client):
+        start.wait()
+        return test_client.post(
+            f"/api/v1/tenders/{TEST_TENDER_ID}/approve", json=body, headers=headers
+        )
+
+    with _independent_clients(2) as clients:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(approve, each) for each in clients]
+            responses = [future.result(timeout=60) for future in futures]
+
+    codes = sorted(response.status_code for response in responses)
+    assert codes == [200, 409], [(r.status_code, r.text) for r in responses]
+
+    winner = next(r for r in responses if r.status_code == 200)
+    loser = next(r for r in responses if r.status_code == 409)
+
+    # No response may report success with a null decision.
+    assert winner.json()["decision"] is not None
+    assert winner.json()["decision"]["status"] == "approved"
+    assert winner.json()["decision"]["approved_by_role"] == "approver"
+    assert "decision" not in loser.json()
+
+    assert _decision_status(draft["decision_id"]) == "approved"
+    assert _tender_stage() == "approved"
+    assert _approval_event_count(draft["decision_id"]) == 1
+
+    detail = client.get(f"/api/v1/tenders/{TEST_TENDER_ID}").json()
+    approved = next(d for d in detail["decisions"] if d["id"] == draft["decision_id"])
+    assert approved["content_mn"] == draft["summary_mn"]
+
+
+def test_an_approval_that_loses_the_race_changes_nothing(client):
+    """Deterministic loser: a rival transaction holds the decision row first.
+
+    The API request blocks on the row lock, then finds the row is no longer a
+    draft. It must return 409, write no audit event and change no state.
+    """
+    draft = _draft(client)
+    outcome: dict = {}
+
+    def approve():
+        outcome["response"] = client.post(
+            f"/api/v1/tenders/{TEST_TENDER_ID}/approve",
+            json={
+                "decision_id": draft["decision_id"],
+                "approved_by": "Жишээ эрх бүхий хянагч",
+            },
+            headers={"X-Role": "approver"},
+        )
+
+    rival = psycopg.connect(DATABASE_URL, row_factory=dict_row)
+    worker = threading.Thread(target=approve, daemon=True)
+    try:
+        rival.execute(
+            """
+            UPDATE decisions
+            SET status = 'approved', approved_by = %s, approved_by_role = 'approver',
+                approval_note = %s, approved_at = NOW()
+            WHERE id = %s AND tender_id = %s AND status = 'draft'
+            """,
+            (
+                "Өрсөлдөгч гүйлгээ",
+                "Өрсөлдөгч гүйлгээгээр батлав.",
+                draft["decision_id"],
+                TEST_TENDER_ID,
+            ),
+        )
+        # The row is now locked by an uncommitted transaction.
+        worker.start()
+        time.sleep(1.5)
+    finally:
+        rival.commit()
+        rival.close()
+
+    worker.join(timeout=60)
+    assert not worker.is_alive(), "the losing approval request never returned"
+
+    response = outcome["response"]
+    assert response.status_code == 409, response.text
+    assert "decision" not in response.json()
+    assert _approval_event_count(draft["decision_id"]) == 0
+    assert _tender_stage() == "human_review"
+    assert _decision_status(draft["decision_id"]) == "approved"
 
 
 def test_approving_an_unknown_decision_returns_404(client):
