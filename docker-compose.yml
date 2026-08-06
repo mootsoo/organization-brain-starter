@@ -7,6 +7,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-organization_brain}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      # init.sql runs only when the data volume is empty. Use
+      # `docker compose down -v` to reload the fictional sample data.
       - ./database/init.sql:/docker-entrypoint-initdb.d/001-init.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-organization_brain} -d ${POSTGRES_DB:-organization_brain}"]
@@ -18,16 +20,26 @@ services:
     build: ./apps/api
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql://organization_brain:organization_brain@db:5432/organization_brain}
+      DB_CONNECT_TIMEOUT: ${DB_CONNECT_TIMEOUT:-5}
       AI_PROVIDER: ${AI_PROVIDER:-mock}
       AI_BASE_URL: ${AI_BASE_URL:-https://api.openai.com/v1}
       AI_API_KEY: ${AI_API_KEY:-}
       AI_MODEL: ${AI_MODEL:-example-model}
+      AI_TIMEOUT_SECONDS: ${AI_TIMEOUT_SECONDS:-30}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
     ports:
       - "8000:8000"
     depends_on:
       db:
         condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).status == 200 else 1)"
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
 
   web:
     build:
@@ -40,7 +52,14 @@ services:
     ports:
       - "3000:3000"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/ || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
 
 volumes:
   postgres_data:

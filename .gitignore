@@ -26,7 +26,10 @@ pnpm-debug.log*
 .DS_Store
 Thumbs.db
 
-# Local data
+# Local data and tooling output
 postgres_data/
 coverage/
 htmlcov/
+working-memory/
+*.log
+screenshots/
