@@ -8,7 +8,8 @@ Workflow boundaries enforced in this module:
 * `POST /draft-summary` creates a `draft` decision only. It never changes the
   tender stage and never marks anything approved.
 * `POST /approve` is a separate, explicit action restricted to the demo
-  `approver` role.
+  `approver` role. It is atomic: a single conditional UPDATE decides the
+  transition, so two competing requests cannot both record an approval.
 * Both actions write an audit event with action, actor, actor role, target,
   timestamp and metadata.
 
@@ -352,7 +353,15 @@ def create_draft_summary(
                 summary,
                 f"{provider.name}:{provider.model}",
                 json.dumps(
-                    {"model_input": model_input, "checks": context["checks"]},
+                    {
+                        # Exactly what the provider received (minimized).
+                        "model_input": model_input,
+                        # Full human-facing evidence, including the
+                        # `source_reference` that is deliberately kept out of
+                        # the model input, so a reviewer can trace the draft.
+                        "rule_findings": context["findings"],
+                        "checks": context["checks"],
+                    },
                     default=str,
                     ensure_ascii=False,
                 ),
@@ -396,18 +405,10 @@ def approve_summary(
     role = require_role(x_role, ("approver",))
 
     with connection() as conn:
-        existing = conn.execute(
-            "SELECT id, status FROM decisions WHERE id = %s AND tender_id = %s",
-            (request.decision_id, tender_id),
-        ).fetchone()
-        if existing is None:
-            raise HTTPException(status_code=404, detail="Батлах төсөл олдсонгүй.")
-        if existing["status"] != "draft":
-            raise HTTPException(
-                status_code=409,
-                detail="Энэ төсөл аль хэдийн шийдвэрлэгдсэн байна.",
-            )
-
+        # The conditional UPDATE is the only authority on this transition.
+        # Two competing requests can both observe `status = 'draft'`, so the
+        # database decides: exactly one UPDATE can match the row while it is
+        # still a draft, and the losing request gets no row back.
         decision = conn.execute(
             """
             UPDATE decisions
@@ -418,6 +419,24 @@ def approve_summary(
             """,
             (request.approved_by, role, request.note, request.decision_id, tender_id),
         ).fetchone()
+
+        if decision is None:
+            # Nothing was approved. Distinguish "no such draft for this tender"
+            # from "already decided" with a single read on this failure path.
+            # Raising here rolls the transaction back, so a losing request
+            # changes no workflow state and writes no approval audit event.
+            exists = conn.execute(
+                "SELECT 1 FROM decisions WHERE id = %s AND tender_id = %s",
+                (request.decision_id, tender_id),
+            ).fetchone()
+            if exists is None:
+                raise HTTPException(
+                    status_code=404, detail="Батлах төсөл олдсонгүй."
+                )
+            raise HTTPException(
+                status_code=409,
+                detail="Энэ төсөл аль хэдийн шийдвэрлэгдсэн байна.",
+            )
 
         conn.execute(
             "UPDATE tenders SET stage = 'approved' WHERE id = %s",
