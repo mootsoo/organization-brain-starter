@@ -9,6 +9,13 @@ Two boundaries are enforced here:
    and are passed to the model as read-only context; nothing the model returns
    can change them.
 
+Data minimization is part of the first boundary. `build_model_input` carries
+business facts and finding text only. Internal row identifiers, database table
+and column pointers, document/evidence references and the raw
+`source_reference` string produced by `app/rules.py` are all left out. Those
+values stay in the deterministic rule results, in the API response and in the
+interface, where a human reviewer can use them.
+
 Model output is untrusted draft content. It is stored with status `draft` and
 becomes official only through a separate human approval action.
 """
@@ -52,8 +59,23 @@ def _plain(value: Any) -> Any:
 def build_model_input(context: dict[str, Any]) -> dict[str, Any]:
     """Select the minimum set of facts the model needs for a draft.
 
-    Internal row identifiers, document pointers, decision history and audit
-    records are deliberately left out (data minimization).
+    Included: tender code, title, thresholds; per-bidder business values; the
+    rule identifier, severity and human-readable message of each finding; and
+    the list of rules that ran.
+
+    Deliberately excluded (data minimization):
+
+    * `id` of the tender, of any submission and of any decision;
+    * `evidence_reference` (a document pointer);
+    * `source_reference` (a row pointer of the form
+      `tender_submissions #<id> · <column> · <document>` built in
+      `app/rules.py`);
+    * decision history and audit records.
+
+    Excluding the source reference does not weaken human traceability: the
+    exact reference is still returned by `GET /api/v1/tenders/{id}`, is shown
+    under every finding in the interface, and is stored alongside the draft in
+    `decisions.source_snapshot`.
     """
     tender = context["tender"]
     return {
@@ -79,7 +101,6 @@ def build_model_input(context: dict[str, Any]) -> dict[str, Any]:
                 "rule_id": item["rule_id"],
                 "severity": item["severity"],
                 "message_mn": item["message_mn"],
-                "source_reference": item["source_reference"],
             }
             for item in context["findings"]
         ],
@@ -118,13 +139,17 @@ class MockProvider:
         if attention:
             lines.append("Анхаарах асуудлууд:")
             for item in attention:
-                lines.append(f"— {item['message_mn']} (эх сурвалж: {item['source_reference']})")
+                # Only the rule identifier is repeated. The exact source row
+                # pointer is never sent to the provider, so the draft cannot
+                # quote it.
+                lines.append(f"— {item['message_mn']} (дүрэм: {item['rule_id']})")
         else:
             lines.append("Дүрмийн шалгалтаар анхаарах асуудал илрээгүй байна.")
 
         lines.append(
-            "Үнэлгээний хороо дээрх баримт, эх сурвалжийг тус бүрээр нь нягталж, "
-            "шаардлагатай тодруулгыг авсны дараа эцсийн дүгнэлтээ гаргана."
+            "Эх сурвалжийн нарийвчилсан заалтыг AI-д дамжуулаагүй тул үнэлгээний хороо "
+            "системийн дүрмийн шалгалтын жагсаалтаас эх сурвалж бүрийг тус тусад нь "
+            "нягталж, шаардлагатай тодруулгыг авсны дараа эцсийн дүгнэлтээ гаргана."
         )
         lines.append(
             f"{DRAFT_MARKER_MN} бөгөөд ялагч сонгосон шийдвэр биш. "
@@ -154,8 +179,10 @@ class OpenAICompatibleProvider:
             "You prepare a concise draft for a Mongolian tender evaluation officer. "
             "Write in clear, non-technical Mongolian. Use only the supplied facts. "
             "Do not rank bidders, recommend a winner, invent evidence, or present the "
-            "draft as an official decision. Finish by stating in Mongolian that the text "
-            "is an AI-prepared draft and not a decision."
+            "draft as an official decision. The supplied context deliberately contains "
+            "no source references, so do not cite, invent or imply one. Finish by "
+            "stating in Mongolian that the text is an AI-prepared draft and not a "
+            "decision."
         )
         user_message = (
             "Prepare a short evaluation draft from this structured context. "
