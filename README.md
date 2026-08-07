@@ -5,7 +5,7 @@ A small, working **reference implementation** that connects organizational data,
 It is aimed at ministries, agencies, state-owned enterprises, NGOs, and companies that want a practical starting point instead of a large "AI transformation" programme.
 
 > **This is a reference implementation, not a production-ready procurement system.**
-> All sample organizations, officials, bidders, tenders, and records are fictional. The demonstration role header is not authentication. Do not use this repository unchanged for an official decision.
+> All organizations, bidders, tenders, amounts, and document references in the current v0.1.0 demonstration dataset are fictional. The demonstration role header is not authentication. Do not use this repository unchanged for an official decision.
 
 > AI is not the organization's brain. Verified data, rules, workflows, decisions, and institutional memory are the brain. AI is a controlled assistant on top of that foundation.
 
@@ -52,6 +52,22 @@ source references · demo role boundary · explicit human approval · audit log
 ```
 
 The important separation: **rule results are computed in Python from database rows**. They are passed to the model as read-only context. Nothing the model returns can change them.
+
+## Screenshots
+
+Every organization, official, bidder and amount shown below is fictional.
+
+![Leadership dashboard at 1440 px, showing three metrics, the five workflow steps and one fictional tender awaiting human review](docs/images/dashboard-desktop.png)
+
+*Dashboard. The workflow in five steps and one fictional tender, before any approval.*
+
+![Tender detail at 1440 px, showing recorded facts for three fictional bidders and five deterministic rule checks with their findings](docs/images/tender-detail-desktop.png)
+
+*Tender detail. Recorded facts and the five deterministic rule checks. Every finding names the exact row and document it came from.*
+
+![Tender workflow at 390 px, showing a generated AI draft marked as a draft rather than a decision](docs/images/tender-workflow-mobile.png)
+
+*Reviewer view at 390 px. The mock provider has written a draft. It is stored as a draft, and approving it is a separate action for an authorized person.*
 
 ## Quick start
 
@@ -180,3 +196,7 @@ Technical documentation is written in English. The leadership-facing interface a
 ## Status
 
 **Phase 1: working foundation.** The goal is not to build a national platform in one step. The goal is to prove one understandable workflow end to end, then add only what real users need.
+
+## License
+
+Licensed under the [Apache License 2.0](LICENSE).
