@@ -1,6 +1,6 @@
 {
   "name": "organization-brain-web",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -8,8 +8,12 @@
     "start": "next start"
   },
   "dependencies": {
-    "next": "16.2.9",
+    "next": "16.2.12",
     "react": "19.2.8",
     "react-dom": "19.2.8"
+  },
+  "overrides": {
+    "postcss": "8.5.26",
+    "sharp": "0.35.3"
   }
 }

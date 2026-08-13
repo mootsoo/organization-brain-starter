@@ -5,7 +5,7 @@ A small, working **reference implementation** that connects organizational data,
 It is aimed at ministries, agencies, state-owned enterprises, NGOs, and companies that want a practical starting point instead of a large "AI transformation" programme.
 
 > **This is a reference implementation, not a production-ready procurement system.**
-> All organizations, bidders, tenders, amounts, and document references in the current v0.1.0 demonstration dataset are fictional. The demonstration role header is not authentication. Do not use this repository unchanged for an official decision.
+> All organizations, bidders, tenders, amounts, and document references in the current v0.1.x demonstration dataset are fictional. The demonstration role header is not authentication. Do not use this repository unchanged for an official decision.
 
 > AI is not the organization's brain. Verified data, rules, workflows, decisions, and institutional memory are the brain. AI is a controlled assistant on top of that foundation.
 
