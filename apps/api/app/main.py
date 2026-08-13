@@ -64,7 +64,7 @@ WORKFLOW_STEPS_MN = [
 
 app = FastAPI(
     title="Organization Brain Starter API",
-    version="0.1.0",
+    version="0.1.1",
     description=(
         "Controlled workflow, deterministic rule checks, AI drafting, human approval "
         "and an audit trail.\n\n"
